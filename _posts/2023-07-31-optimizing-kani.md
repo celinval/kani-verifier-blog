@@ -43,17 +43,18 @@ To verify [Cargo](https://doc.rust-lang.org/stable/cargo/) packages, Kani employ
 
 The verification problem is computationally hard, so any optimisation that can brings benefits overall, or help in some specific situation is worth having.
 
-# Allowing SAT Solver Selection from Harnesses
+# Selecting a different SAT Solver globally or per harness
 
 SAT solving is typically the most time-consuming part of a Kani run. There is a large number of SAT solvers available, whose performance can vary widely depending on the specific type of formula, and it can be very helpful to be able to try different SAT solvers on the same problem to dertermine which one performs best.
 
-By default, CBMC uses the [MiniSat](http://minisat.se/) SAT solver, but it also allows to use a different SAT (or [SMT](https://en.wikipedia.org/wiki/Satisfiability_modulo_theories)) through a command line switch.
+By default, CBMC uses the [MiniSat](http://minisat.se/) SAT solver, but it also allows to use a different SAT (or [SMT](https://en.wikipedia.org/wiki/Satisfiability_modulo_theories)) solver through a command line switch.
 
 To ease the selection of the SAT solver for Kani users, we've introduced a Kani attribute, `kani::solver`, that can be used to specify the SAT solver to use for each harness.
+We've also introduced a global command line switch `--solver <SOLVER>` that overrides the harness `kani::solver` attribute when activated.
 
 For instance, one can configure Kani to use [CaDiCaL](https://github.com/arminbiere/cadical) as follows:
 
-```
+```rust
 #[kani::proof]
 #[kani::solver(cadical)] // <--- Use CaDiCaL for this harness
 fn my_harness() { ... }
@@ -61,17 +62,68 @@ fn my_harness() { ... }
 
 Changing the solver can result in orders of magnitude performance difference. Thus, we encourage users to try different solvers to find the one that performs the best on their harness. At the time of writing, the following three solvers are supported out of the box by Kani: `minisat` (the default solver), `cadical`, and `kissat` ([Kissat](https://github.com/arminbiere/kissat)). Kani also allows using other SAT solvers available as standalone binaries in your system `PATH`. This can be done using:
 
-```
+```rust
 `#[kani::solver(bin="<SAT_SOLVER_BINARY>")]                                                                                 `
 ```
 
 An example of a SAT solver that we've found effective for certain classes of programs (e.g. ones involving cryptographic operations) is [CryptoMiniSat](https://github.com/msoos/cryptominisat). After installing CryptoMiniSat and adding the binary to your path, you can configure Kani to use it via:
 
-```
+```rust
 #[kani::solver(bin="cryptominisat5")]
 ```
 
-As illustrated by this [this pull-request](https://github.com/aws/s2n-quic/pull/1771) on the [s2n-quic repository](https://github.com/aws/s2n-quic), using `cadical` instead of the default minisat brought speedups in the range of x1.5 x28. And all it takes to switch is adding an attribute to your harness!
+The table below shows the runtimes in seconds obtained using the global `--solver` switch with Minisat, Cadical and Kissat on the `s2n-quic-core` crate, with a timeout set at 1600s. The `Speedup` columns give the speedup factor with respect to Minisat, and the `Fastest` column gives the fastest solver for each benchmark.
+
+TODO add kani and cbmc versions.
+
+```
+Harness                                                  Minisat  CaDiCaL  Kissat  CaDiCaL  Kissat   Fastest
+                                                                                   Speedup  Speedup
+recovery::rtt_estimator::test::weighted_average_test...  TIMEOUT  68.99    40.13   ?        ?        Kissat
+sync::cursor::tests::oracle_test...                      TIMEOUT  255.96   217.09  ?        ?        Kissat
+random::tests::gen_range_biased_test...                  1459.82  6.80     5.46    214.78   267.49   Kissat
+sync::spsc::tests::alloc_test...                         1003.92  70.12    62.75   14.32    16.00    Kissat
+slice::tests::vectored_copy_fuzz_test...                 942.01   69.18    103.96  13.62    9.06     CaDiCaL
+inet::ipv6::tests::header_getter_setter_test...          34.68    35.08    34.73   0.99     1.00     Minisat
+varint::tests::eight_byte_sequence_test...               28.35    9.87     9.83    2.87     2.88     Kissat
+varint::tests::four_byte_sequence_test...                15.08    9.59     9.37    1.57     1.61     Kissat
+packet::number::tests::round_trip...                     13.46    13.40    14.71   1.00     0.92     CaDiCaL
+inet::ipv4::tests::header_getter_setter_test...          13.06    13.57    13.20   0.96     0.99     Minisat
+varint::tests::round_trip_values_test...                 12.59    12.54    14.23   1.00     0.88     CaDiCaL
+frame::stream::tests::try_fit_test...                    12.08    22.34    18.18   0.54     0.66     Minisat
+varint::tests::two_byte_sequence_test...                 11.57    8.61     8.50    1.34     1.36     Kissat
+inet::ipv6::tests::scope_test...                         11.34    11.60    12.78   0.98     0.89     Minisat
+inet::checksum::tests::differential...                   10.55    16.21    14.28   0.65     0.74     Minisat
+varint::tests::one_byte_sequence_test...                 9.32     7.41     7.53    1.26     1.24     CaDiCaL
+xdp::decoder::tests::decode_test...                      8.08     4.85     5.79    1.67     1.40     CaDiCaL
+frame::crypto::tests::try_fit_test...                    3.42     5.17     4.72    0.66     0.72     Minisat
+inet::ipv4::tests::scope_test...                         2.76     2.82     3.50    0.98     0.79     Minisat
+interval_set::tests::interval_set_inset_range_test...    2.31     2.41     2.31    0.96     1.00     Minisat
+packet::number::tests::rfc_differential_test...          2.02     2.49     2.44    0.81     0.83     Minisat
+packet::number::map::tests::insert_value...              1.70     1.72     1.75    0.99     0.97     Minisat
+packet::number::tests::truncate_expand_test...           1.38     1.62     1.61    0.85     0.86     Minisat
+varint::tests::checked_ops_test...                       1.00     1.77     1.21    0.56     0.82     Minisat
+packet::number::sliding_window::test::insert_test...     0.88     0.94     1.03    0.94     0.86     Minisat
+varint::tests::table_differential_test...                0.61     0.68     0.63    0.90     0.98     Minisat
+ct::tests::mul...                                        0.57     0.47     0.54    1.21     1.05     CaDiCaL
+stream::iter::fuzz_target::fuzz_builder...               0.52     0.53     0.55    0.97     0.94     Minisat
+ct::tests::sub...                                        0.49     0.42     0.46    1.15     1.07     CaDiCaL
+ct::tests::add...                                        0.45     0.42     0.45    1.06     0.99     CaDiCaL
+ct::tests::rem...                                        0.43     0.71     0.49    0.60     0.87     Minisat
+ct::tests::div...                                        0.42     0.58     0.66    0.73     0.65     Minisat
+ct::tests::ct_lt...                                      0.42     0.41     0.42    1.02     1.00     CaDiCaL
+ct::tests::ct_le...                                      0.41     0.40     0.42    1.02     0.98     CaDiCaL
+ct::tests::ct_gt...                                      0.40     0.40     0.41    1.00     0.98     CaDiCaL
+ct::tests::ct_ge...                                      0.40     0.40     0.42    1.01     0.96     CaDiCaL
+packet::number::tests::example_test...                   0.22     0.22     0.22    1.00     0.96     CaDiCaL
+```
+
+We see that Kissat and Cadical can solve benchmarks that would timeout with Minisat, and provide significant speedups on some other benchmarks. We also see that Minisat remains the fastest solver for harnesses that already run in a matter of seconds.
+
+By picking the best solver for each harness using the `kani::solver` attribute, we can can bring the total cumulative runtime from 6806s to 562s (counting timeouts as 1600s), while solving two more harnesses. Great savings if your harnesses are run in CI!
+
+Maybe drop that reference ?
+This [this pull-request](https://github.com/aws/s2n-quic/pull/1771) on the [s2n-quic repository](https://github.com/aws/s2n-quic) shows that using `cadical` instead of the default `minisat` brought speedups in the range of x1.5-x28 on a number of benchmarks.
 
 # Adding Direct Export of GOTO Binaries
 
