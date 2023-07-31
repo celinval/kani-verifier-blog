@@ -28,20 +28,25 @@ Internally, this verification process is a bit more complicated, and can be spli
 
 1. **Compilation:** The Rust crate under verification and its dependencies are compiled into a program in a format that's more suitable to verification.
 2. **Symbolic execution:** This program is then symbolically executed in order to generate a single logic formula that represents all possible execution paths and the properties to be checked.
-3. **Satisfiability solving:** This logic formula is then solved by employing a SAT or SMT solver that either finds a combination of concrete values that can satisfy the formula (a counter example to a safety property or user assertion exists), or prove that no assignement can satisfy the formula (the program is safe and all assertion hold).
+3. **Satisfiability solving:** This logic formula is then solved by employing a SAT or SMT solver that either finds a combination of concrete values that can satisfy the formula (a counter example to a safety property or user assertion exists), or prove that no assignment can satisfy the formula (the program is safe and all assertion hold).
 
 Kani in fact employs a collection of tools to perform the different stages of the verification. Kani's main process is called `kani-driver`, and its main purpose is to orchestrate the execution and communication of these other tools:
 
-1. The compilation statge is done mostly* by the kani-compiler, which is an extension of the Rust compiler that we have developed. The kani-compiler will generate a `goto-program` by combining all the logic that is reachable from a harness.
+1. The compilation stage is done mostly[^build-details] by the kani-compiler, which is an extension of the Rust compiler that we have developed. The kani-compiler will generate a `goto-program` by combining all the logic that is reachable from a harness.
 2. For the symbolic execution stage Kani invokes [CBMC](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=&cad=rja&uact=8&ved=2ahUKEwiet5XSyqiAAxUOEFkFHeUiB6IQFnoECBgQAQ&url=https%3A%2F%2Fwww.cprover.org%2Fcbmc%2F&usg=AOvVaw3LFf7eUtKK6bQEkDWKE29S&opi=89978449).
 3. The satisfiability checking stage is performed by CBMC itself, by invoking a [satisfiability (SAT) solver](https://en.wikipedia.org/wiki/SAT_solver) such as [MiniSat](http://minisat.se/).
 
+
+Finally, Kani ships with a crate (named `kani`) that provides a set of APIs that defines attributes, functions, traits and implementations that allow users to create and customize their harnesses. This crate is automatically added as a dependency to every other crate Kani compiles.
+
 <!-- double-wrapping means we can click to enlarge -->
-<a href="{{site.baseurl | prepend: site.url}}/assets/images/kani-high-level.png"><img src="{{arch itecture.baseurl | prepend: site.url}}/assets/images/kani-high-level.png" alt="Kani architecture" /></a>
+![Kani architecture](/kani-verifier-blog/assets/images/kani-high-level.png)
 
-To verify [Cargo](https://doc.rust-lang.org/stable/cargo/) packages, Kani employs Cargo to correctly build all the dependencies before translating them to goto-programs.
 
-The verification problem is computationally hard, so any optimisation that can brings benefits overall, or help in some specific situation is worth having.
+Note that the verification problem is computationally hard. Thus, some optimisations can have a positive effect only on a subset of harnesses, while other optimisations can bring benefits overall. Kani was design to provide a good out-of-the box experience, but also to allow experimentation and further customization to achieve an optimal performance for each harness.
+
+[^build-details]: To verify [Cargo](https://doc.rust-lang.org/stable/cargo/) packages, Kani employs Cargo to correctly build all the dependencies before translating them to goto-programs.
+
 
 # Supporting Multiple SAT Solvers
 
