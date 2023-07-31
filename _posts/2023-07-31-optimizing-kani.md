@@ -131,23 +131,77 @@ This [this pull-request](https://github.com/aws/s2n-quic/pull/1771) on the [s2n-
 
 # Adding Direct Export of GOTO Binaries
 
-The Kani compiler translates a Rust program into a *symbol table* expressed in the format expected by CBMC. A symbol table lists all symbols manipulated by the program together with their source locations and definitions (types symbols and their definitions, functions symbols and their bodies, static symbols and their initial value, etc.) represented as abstract syntax trees.
-
-Kani originally serialized symbol tables to JSON and used the CBMC utility `symtab2gb`  to translate the JSON symbol table to GOTO binary format, which is the format that CBMC actually expects as input. The JSON to GOTO binary conversion was one of the most time and memory consuming steps in the compilation stage.
-
-We implemented direct GOTO binary serialisation in Kani (see code [here](https://github.com/model-checking/kani/blob/main/cprover_bindings/src/irep/goto_binary_serde.rs)), which allows us to skip the costly invocation of `symtab2gb`. Kani now exports GOTO symbol tables 2x-4x faster with a 2x-3x reduction in peak memory consumption.
-
-The table below reports  time and memory consumption to parse and compile two commonly used crates to JSON vs GOTO binaries.
-
-TODO benchcomp numbers here
-- `kani --write-json-symtab` vs `kani` (using the kani 0.32 and cbmc 5.88.0), isolating the the codegen + goto model export time.
-
-This new export method is globally faster and more memory efficient and has become the new default.
+The Kani compiler translates a Rust program into a `goto-program` stored in a  *symbol table*  that lists all symbols manipulated by the program together with their source locations and definitions (types symbols and their definitions, functions symbols and their bodies, static symbols and their initial value, etc.). The symbol table data consists mainly of abstract syntax trees. Kani originally serialized symbol tables to JSON and used the CBMC utility `symtab2gb`  to translate the JSON symbol table to GOTO binary format, which is the format that CBMC actually expects as input. The JSON to GOTO binary conversion was one of the most time and memory consuming steps in the compilation stage. We implemented direct GOTO binary serialisation in Kani (see code [here](https://github.com/model-checking/kani/blob/main/cprover_bindings/src/irep/goto_binary_serde.rs)), which allows us to skip the costly invocation of `symtab2gb`. Kani can now perform the codegen and symbol table export 2-4x faster than before, sometimes with a reduction in peak memory consumption depending on the crate.
 
 
-## Details on GOTO binary format
 
-Internally, CBMC uses a single generic data structure called [`irept`](https://github.com/diffblue/cbmc/blob/develop/src/util/irep.h#L308) to represent all tree-structured data (see [statements](https://github.com/diffblue/cbmc/blob/develop/src/util/std_expr.h), [expressions](https://github.com/diffblue/cbmc/blob/develop/src/util/std_expr.h), [types](https://github.com/diffblue/cbmc/blob/develop/src/util/std_types.h) and [source locations](https://github.com/diffblue/cbmc/blob/develop/src/util/source_location.h) in the CBMC code base). 
+The table below reports time and memory consumption required for  codegen and symbol table export steps for three crates of the `s2n-quic` project, run using `kani --tests --only-codegen`.
+The time includes Rust to MIR compilation time, GOTO code generation from MIR time and GOTO binary export, either through JSON and `symtab2gb`, or directly to GOTO binary.
+
+| Crate               | JSON export    |               |                                | GOTO binary export |               |                                |
+| ------------------- | -------------- | ------------- | ------------------------------ | ------------------ | ------------- | ------------------------------ |
+|                     | System time(s) | User time (s) | Maximum resident set size (kb) | System time(s)     | User time (s) | Maximum resident set size (kb) |
+| `s2n-quic-core`     | 29             | 198           | 669868                         | 22                 | 111           | 815076                         |
+| `s2n-quic-platform` | 13             | 99            | 449652                         | 13                 | 91            | 450128                         |
+| `s2n-quic-xdp`      | 11             | 92            | 450128                         | 11                 | 95            | 450708                         |
+
+
+We can see that for `s2n-quic-core`, which contains over 35 individual harnesses, the User time required to compile and export is reduced by almost 45% 199s to 111s, for a 20% memory consumption increase. For the two other crates which contain respectively 3 and 1 harnesses, the User time gains are lower at 10% and even negative at -4%, for a negligible memory consumption increase.
+
+
+Looking in more detail at individual harnesses (only for GOTO code generation and GOTO binary export time, without Rust to MIR compilation) we see that the time for JSON symbol table export used to dominate the GOTO code generation, and that direct GOTO binary export is now faster than GOTO code generation from MIR.
+
+| Harness                                                     | GOTO codegen time (s) | JSON export (s) | GOTO-binary export (s) | export speedup | codegen + export speedup |
+| ----------------------------------------------------------- | --------------------- | --------------- | ---------------------- | -------------- | ------------------------ |
+| `ct::tests::ct_ge...`                                       | 0,32                  | 1,48            | 0,17                   | 8,70           | 3,67                     |
+| `ct::tests::ct_gt...`                                       | 0,26                  | 1,32            | 0,14                   | 9,42           | 3,95                     |
+| `ct::tests::ct_le...`                                       | 0,26                  | 1,32            | 0,14                   | 9,42           | 3,95                     |
+| `ct::tests::ct_lt...`                                       | 0,26                  | 1,33            | 0,14                   | 9,50           | 3,97                     |
+| `ct::tests::rem...`                                         | 0,26                  | 1,32            | 0,16                   | 8,25           | 3,76                     |
+| `ct::tests::sub...`                                         | 0,26                  | 1,33            | 0,14                   | 9,50           | 3,97                     |
+| `ct::tests::div...`                                         | 0,26                  | 1,33            | 0,14                   | 9,50           | 3,97                     |
+| `ct::tests::add...`                                         | 0,26                  | 1,33            | 0,14                   | 9,50           | 3,97                     |
+| `ct::tests::mul...`                                         | 0,26                  | 1,32            | 0,14                   | 9,42           | 3,95                     |
+| `frame::crypto::tests::try_fit_test...`                     | 0,66                  | 3,31            | 0,39                   | 8,48           | 3,78                     |
+| `frame::stream::tests::try_fit_test...`                     | 0,67                  | 3,44            | 0,38                   | 9,05           | 3,91                     |
+| `inet::checksum::tests::differential...`                    | 0,51                  | 2,46            | 0,26                   | 9,46           | 3,85                     |
+| `inet::ipv4::tests::header_getter_setter_test...`           | 0,44                  | 2,11            | 0,22                   | 9,59           | 3,86                     |
+| `inet::ipv4::tests::scope_test...`                          | 1,01                  | 5,18            | 0,56                   | 9,25           | 3,94                     |
+| `inet::ipv6::tests::header_getter_setter_test...`           | 0,44                  | 2,17            | 0,23                   | 9,43           | 3,89                     |
+| `inet::ipv6::tests::scope_test...`                          | 1,08                  | 5,34            | 0,59                   | 9,05           | 3,84                     |
+| `interval_set::tests::interval_set_inset_range_test...`     | 0,83                  | 4,3             | 0,45                   | 9,55           | 4,00                     |
+| `packet::number::map::tests::insert_value...`               | 0,28                  | 1,49            | 0,16                   | 9,31           | 4,02                     |
+| `packet::number::sliding_window::test::insert_test...`      | 0,86                  | 4,22            | 0,46                   | 9,17           | 3,84                     |
+| `packet::number::tests::example_test...`                    | 1,09                  | 5,67            | 0,59                   | 9,61           | 4,02                     |
+| `packet::number::tests::rfc_differential_test...`           | 0,30                  | 1,62            | 0,18                   | 9,40           | 4.0                      |
+| `packet::number::tests::truncate_expand_test...`            | 0,63                  | 3,23            | 0,35                   | 9,22           | 3,9                      |
+| `packet::number::tests::round_trip...`                      | 0,22                  | 1,18            | 0,13                   | 9,00           | 4,00                     |
+| `random::tests::gen_range_biased_test...`                   | 0,31                  | 1,58            | 0,18                   | 8,77           | 3,85                     |
+| `recovery::rtt_estimator::test::weighted_average_test...`   | 0,43                  | 2,23            | 0,24                   | 9,29           | 3,97                     |
+| `slice::tests::vectored_copy_fuzz_test...`                  | 0,73                  | 3,33            | 0,35                   | 9,51           | 3,75                     |
+| `stream::iter::fuzz_target::fuzz_builder...`                | 0,26                  | 1,35            | 0,14                   | 9,64           | 4,02                     |
+| `sync::cursor::tests::oracle_test...`                       | 0,92                  | 4,41            | 0,46                   | 9,58           | 3,86                     |
+| `sync::spsc::tests::alloc_test...`                          | 0,82                  | 4,15            | 0,45                   | 9,22           | 3,91                     |
+| `varint::tests::checked_ops_test...`                        | 0,95                  | 4,94            | 0,55                   | 8,98           | 3,92                     |
+| `varint::tests::table_differential_test...`                 | 0,95                  | 4,93            | 0,51                   | 9,66           | 4,02                     |
+| `varint::tests::eight_byte_sequence_test...`                | 0,96                  | 4,97            | 0,52                   | 9,55           | 4,00                     |
+| `varint::tests::four_byte_sequence_test...`                 | 0,95                  | 4,95            | 0,52                   | 9,51           | 4,01                     |
+| `varint::tests::two_byte_sequence_test...`                  | 0,97                  | 4,98            | 0,52                   | 9,57           | 3,99                     |
+| `varint::tests::one_byte_sequence_test...`                  | 0,25                  | 1,32            | 0,14                   | 9,42           | 4,02                     |
+| `varint::tests::round_trip_values_test...`                  | 0,27                  | 1,38            | 0,15                   | 9,20           | 3,92                     |
+| `xdp::decoder::tests::decode_test...`                       | 0,58                  | 2,93            | 0,31                   | 9,45           | 3,94                     |
+| `message::cmsg::tests::round_trip_test...`                  | 0,37                  | 1,59            | 0,19                   | 8,36           | 3,50                     |
+| `message::cmsg::tests::iter_test...`                        | 0,77                  | 3,75            | 0,41                   | 9,14           | 3,83                     |
+| `message::msg::tests::address_inverse_pair_test...`         | 0,85                  | 4,07            | 0,43                   | 9,46           | 3,84                     |
+| `task::completion_to_tx::assign::tests::assignment_test...` | 0,36                  | 1,48            | 0,17                   | 8,70           | 3,47                     |
+|                                                             | **Total**             | **Total**       | **Total**              | **Avg**        | **Avg**                  |
+|                                                             | 22,8                  | 114,66          | 12,33                  | 9,29           | 3,90                     |
+
+GOTO binary export is now the default because it is faster when there are multiple proof harnesses in a crate, but the switch `--write-json-symbtab` activates the JSON export if you need it. The memory consumption can be sometimes higher, but can also sometimes be lowe depending on how much opportunity for sharing of identical subtrees the crate offers.
+
+## Details on the GOTO binary format
+
+Internally, CBMC uses a single generic data structure called [`irept`](https://github.com/diffblue/cbmc/blob/develop/src/util/irep.h#L308) to represent all tree-structured data (see [statements](https://github.com/diffblue/cbmc/blob/develop/src/util/std_expr.h), [expressions](https://github.com/diffblue/cbmc/blob/develop/src/util/std_expr.h), [types](https://github.com/diffblue/cbmc/blob/develop/src/util/std_types.h) and [source locations](https://github.com/diffblue/cbmc/blob/develop/src/util/source_location.h) in the CBMC code base). A GOTO binary is mainly a collection of serialised `irept`.
 
 The `Irep` type would look like this if written in Rust:
 
@@ -184,11 +238,11 @@ Irep {
 }
 ```
 
-A GOTO binary mostly contains serialised `Ireps`. The serde algorithm for GOTO binaries uses *value numbering* to avoid repeating identical `Ireps` and strings in the binary file, and uses *7-bit variable length encoding* for integer values to reduce overall file size.
+The serialization/deserialization algorithm for GOTO binaries uses a technique called *value numbering* to avoid repeating identical `Ireps` and strings in the binary file, and uses *7-bit variable length encoding* for integer values to reduce the overall file size.
 
-A *value numbering function* for a key type `K` is a function that assigns a unique number in the range `[0, N)` to each value in a set of values of type `K`. Numberings are usually implemented using a hash map of type `HashMap<K, usize>`. Each value of the set is numbered by performing a lookup in the map: if an entry for `k` is found, return the associated value, otherwise insert a new entry `(k, numbering.size())` in the numbering map and return the unique number for that entry. Value numbering for `Ireps` uses vectors of integers built from the unique numbers of the irep fields as keys. An `Irep` is uniquely numbered by recursively numbering its id, subtrees and named subtrees, then assembling a key from these unique numbers and looking up the unique number for that key. Since two `Ireps` with the same id, subtrees and named subtrees are represented by the same key, the unique number of the key identifies the `Irep` by its contents. CBMC's binary serde algorithm uses numbering functions for `Ireps` and `Strings` that are used as a cache of already serialised Ireps and Strings. An `Irep` node is fully serialised only the first time it is encountered. Later occurrences are serialised by reference, using their unique identifier. This achieves maximum sharing of identical subtrees and strings in the binary file.
+A *value numbering function* for a type `K` is a function that assigns a unique number in the range `[0, N)` to each value in a multiset `S` of values of type `K` ((multiset: some values can be repeated).  Numberings are usually implemented using a hash map of type `HashMap<K, usize>`. Each value 'k' in the set `S` is numbered by performing a lookup in the map: if an entry for `k` is found, return the associated value, otherwise insert a new entry `(k, numbering.size())` and return the unique number for that entry. Value numbering for `Ireps` uses vectors of integers built from the unique numbers of the `Irep` fields as keys. An `Irep` is uniquely numbered by recursively numbering its id, subtrees and named subtrees, assembling a key from these unique numbers and looking up the unique number for that key in the numbering. Since two `Ireps` with the same id, subtrees and named subtrees are represented by the same key, the unique number of the key identifies the `Irep` by its contents. CBMC's binary serde algorithm uses numbering functions for `Ireps` and `Strings` that are used as a cache of already serialised Ireps and Strings. An `Irep` node is fully serialised only the first time it is encountered. Later occurrences are serialised by reference, i.e. only by writing their unique identifier. This achieves maximum sharing of identical subtrees and strings in the binary file.
 
-The *7-bit variable length encoding* scheme for integers works as follows: *a*n integer is serialised to a list of 8-bits words, where each 8-bit word encodes a group of seven bits of the original integer and one bit signals the continuation or termination of the list. For instance, the decimal value 32bit decimal `190341` is represented as `00000000000000101110011110000101` in binary. Splitting it in groups of 7-bits starting from the right, we get `0000101 1001111 0001011 0000000 0000`. We see that all bits in the two last groups are false, so only the first three groups are serialised. With continuation bits added (represented in parentheses), the encoding for this 32 bit number only uses 24 bits:  `(1)0000101(1)1001111(0)0001011`.
+The *7-bit variable length encoding* scheme for integers works as follows: an integer of `N` bytes is serialised to a list of `M` bytes, where each byte encodes a group of seven bits of the original integer and one bit signals the continuation or termination of the list. For instance, the decimal value 32bit decimal `190341` is represented as `00000000000000101110011110000101` in binary. Splitting this number in groups of 7-bits starting from the right, we get `0000101 1001111 0001011 0000000 0000`. We see that all bits in the two last groups are false, so only the first three groups will be serialised. With continuation bits added (represented in parentheses), the encoding for this 4-byte number only uses 3-bytes:  `(1)0000101(1)1001111(0)0001011`.
 
 ## Making Constant Propagation Field-Sensitive for Union Types in CBMC
 
