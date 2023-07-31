@@ -43,14 +43,16 @@ To verify [Cargo](https://doc.rust-lang.org/stable/cargo/) packages, Kani employ
 
 The verification problem is computationally hard, so any optimisation that can brings benefits overall, or help in some specific situation is worth having.
 
-# Selecting a different SAT Solver globally or per harness
+# Supporting Multiple SAT Solvers
 
-SAT solving is typically the most time-consuming part of a Kani run. There is a large number of SAT solvers available, whose performance can vary widely depending on the specific type of formula, and it can be very helpful to be able to try different SAT solvers on the same problem to dertermine which one performs best.
+SAT solving is typically the most time-consuming part of a Kani run. There is a large number of SAT solvers available, whose performance can vary widely depending on the specific type of formula, and it can be very helpful to be able to try different SAT solvers on the same problem to determine which one performs best.
 
-By default, CBMC uses the [MiniSat](http://minisat.se/) SAT solver, but it also allows to use a different SAT (or [SMT](https://en.wikipedia.org/wiki/Satisfiability_modulo_theories)) solver through a command line switch.
+By default, CBMC uses the [MiniSat](http://minisat.se/) SAT solver.
+While CBMC can be configured to use a different SAT solver at build time, having to rebuild it to switch SAT solvers is inconvenient.
+Thus, we introduced an enhancement to CBMC's build system that allows CBMC to be built with multiple SAT solvers, so that the user can select one of them at _runtime_ via an option (`--sat-solver`)[^1].
 
-To ease the selection of the SAT solver for Kani users, we've introduced a Kani attribute, `kani::solver`, that can be used to specify the SAT solver to use for each harness.
-We've also introduced a global command line switch `--solver <SOLVER>` that overrides the harness `kani::solver` attribute when activated.
+With this enhancement in CBMC, and to ease the selection of the SAT solver for Kani users, we've introduced a Kani attribute, `kani::solver`, that can be used to specify the SAT solver to use for each harness.
+We've also introduced a global command-line switch, `--solver <SOLVER>`, that overrides the harness `kani::solver` attribute.
 
 For instance, one can configure Kani to use [CaDiCaL](https://github.com/arminbiere/cadical) as follows:
 
@@ -63,7 +65,7 @@ fn my_harness() { ... }
 Changing the solver can result in orders of magnitude performance difference. Thus, we encourage users to try different solvers to find the one that performs the best on their harness. At the time of writing, the following three solvers are supported out of the box by Kani: `minisat` (the default solver), `cadical`, and `kissat` ([Kissat](https://github.com/arminbiere/kissat)). Kani also allows using other SAT solvers available as standalone binaries in your system `PATH`. This can be done using:
 
 ```rust
-`#[kani::solver(bin="<SAT_SOLVER_BINARY>")]                                                                                 `
+#[kani::solver(bin="<SAT_SOLVER_BINARY>")]                                                                                 `
 ```
 
 An example of a SAT solver that we've found effective for certain classes of programs (e.g. ones involving cryptographic operations) is [CryptoMiniSat](https://github.com/msoos/cryptominisat). After installing CryptoMiniSat and adding the binary to your path, you can configure Kani to use it via:
@@ -268,3 +270,5 @@ int main() {
 # Conclusion
 
 The cumulative effects of these changes provides for a better user experience, faster code-generation times, greatly reduced peak memory consumption, and better analysis performance.
+
+[^1]: Without our enhancement to CBMC, it was already possible to select a different SAT solver without rebuilding CBMC via the `--external-sat-solver` option. However, this option doesn't use the solver in an incremental fashion through its library API, and instead relies on writing DIMACS files to disk, which often results in subpar performance.
